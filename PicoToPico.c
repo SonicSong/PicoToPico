@@ -1,25 +1,57 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "pico/stdlib.h"
 #include "hardware/pio.h"
 #include "hardware/uart.h"
 
 #include "blink.pio.h"
 
-void blink_pin_forever(PIO pio, uint sm, uint offset, uint pin, uint freq) {
-    blink_program_init(pio, sm, offset, pin);
-    pio_sm_set_enabled(pio, sm, true);
+// void blink_pin_forever(PIO pio, uint sm, uint offset, uint pin, uint freq) {
+//     blink_program_init(pio, sm, offset, pin);
+//     pio_sm_set_enabled(pio, sm, true);
 
-    printf("Blinking pin %d at %d Hz\n", pin, freq);
+//     printf("Blinking pin %d at %d Hz\n", pin, freq);
 
-    // PIO counter program takes 3 more cycles in total than we pass as
-    // input (wait for n + 1; mov; jmp)
-    pio->txf[sm] = (125000000 / (2 * freq)) - 3;
+//     // PIO counter program takes 3 more cycles in total than we pass as
+//     // input (wait for n + 1; mov; jmp)
+//     pio->txf[sm] = (125000000 / (2 * freq)) - 3;
+// }
+
+int comm_check() {
+    bool readReady = false;
+
+    while (readReady == false) {
+        printf("Awaiting read ready...\n");
+
+        // char readFromUartC = uart_getc(UART_ID);
+
+        // if (readFromUartC == 'r') {
+        //     readReady == true;
+        // }
+
+        int readFromUartC = getchar_timeout_us(0);
+        if (readFromUartC != PICO_ERROR_TIMEOUT) {
+            printf("Read ready!");
+            readReady = true;
+        }
+
+        sleep_ms(100);
+    }
+
+    return 1;
+}
+
+int comm_send() {
+
+}
+
+int comm_receive() {
+
 }
 
 // UART defines
 // By default the stdout UART is `uart0`, so we will use the second one
 #define UART_ID uart1
-#define BAUD_RATE 115200
 
 // Use pins 4 and 5 for UART1
 // Pins can be changed, see the GPIO function select table in the datasheet for information on GPIO assignments
@@ -32,54 +64,59 @@ int main() {
     stdio_init_all();
 
     // PIO Blinking example
-    PIO pio = pio0;
-    uint offset = pio_add_program(pio, &blink_program);
-    printf("Loaded program at %d\n", offset);
+    // PIO pio = pio0;
+    // uint offset = pio_add_program(pio, &blink_program);
+    // printf("Loaded program at %d\n", offset);
     
-    #ifdef PICO_DEFAULT_LED_PIN
-    blink_pin_forever(pio, 0, offset, PICO_DEFAULT_LED_PIN, 3);
-    #else
-    blink_pin_forever(pio, 0, offset, 6, 3);
-    #endif
-    // For more pio examples see https://github.com/raspberrypi/pico-examples/tree/master/pio
+    // #ifdef PICO_DEFAULT_LED_PIN
+    // blink_pin_forever(pio, 0, offset, PICO_DEFAULT_LED_PIN, 3);
+    // #else
+    // blink_pin_forever(pio, 0, offset, 6, 3);
+    // #endif
+
+    while(true) {
+        int awaitEnter = getchar_timeout_us(0);
+        if (awaitEnter != PICO_ERROR_TIMEOUT) {
+            if (awaitEnter == 10 || awaitEnter == 13) {
+                break;
+            }
+        }
+    }
 
     // Set up our UART
-    uart_init(UART_ID, BAUD_RATE);
-    // Set the TX and RX pins by using the function select on the GPIO
-    // Set datasheet for more information on function select
-    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
-    gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
-    
-    // Use some the various UART functions to send out data
-    // In a default system, printf will also output via the default UART
-    
-    // Send out a string, with CR/LF conversions
-    uart_puts(UART_ID, " Hello, UART!\n");
-    
-    // For more examples of UART use see https://github.com/raspberrypi/pico-examples/tree/master/uart
+    int baudrate = 115200;
+    char buffer[128];
+    printf("Input new baudrate or keep old by pressing [Enter]: ");
+    while(true) {
+        int tempBaudRate = 0;
+        int readBaudRate = getchar_timeout_us(0);
+        if (readBaudRate != PICO_ERROR_TIMEOUT) {
+            if (scanf("%s", buffer) == 1) {
+                printf("You sent: %s\n", buffer);
+                tempBaudRate = atoi(buffer);
+            }
 
-    while (true) {
-        printf("Hello, world!\n");
-        sleep_ms(1000);
-    }
-}
-
-int comm_check() {
-    bool readReady = false;
-
-    while (readReady == false) {
-        char readFromUartC = uart_getc(UART_ID);
-
-        if (readFromUartC == 'r') {
-            readReady == true;
+            if (readBaudRate == 10 || readBaudRate == 13) {
+                baudrate = tempBaudRate;
+                break;
+            }
         }
-
-        sleep_ms(5000);
     }
 
-    return 1;
-}
+    printf("New baudrate: %d\n", baudrate);
 
-int comm_send() {
+    // uart_init(UART_ID, baudrate);
     
+    // gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
+    // gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+    
+    // uart_puts(UART_ID, " Hello, UART!\n");
+
+    int commReady = 0;
+    commReady = comm_check();
+
+    while (commReady == 1) {
+        printf("Hello, Skylink!\n");
+        sleep_ms(100);
+    }
 }
