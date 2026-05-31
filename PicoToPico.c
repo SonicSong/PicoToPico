@@ -1,79 +1,122 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "hardware/pio.h"
 #include "hardware/uart.h"
-
 #include "blink.pio.h"
 
-// void blink_pin_forever(PIO pio, uint sm, uint offset, uint pin, uint freq) {
-//     blink_program_init(pio, sm, offset, pin);
-//     pio_sm_set_enabled(pio, sm, true);
-
-//     printf("Blinking pin %d at %d Hz\n", pin, freq);
-
-//     // PIO counter program takes 3 more cycles in total than we pass as
-//     // input (wait for n + 1; mov; jmp)
-//     pio->txf[sm] = (125000000 / (2 * freq)) - 3;
-// }
-
-int comm_check() {
-    bool readReady = false;
-
-    while (readReady == false) {
-        printf("Awaiting read ready...\n");
-
-        // char readFromUartC = uart_getc(UART_ID);
-
-        // if (readFromUartC == 'r') {
-        //     readReady == true;
-        // }
-
-        int readFromUartC = getchar_timeout_us(0);
-        if (readFromUartC != PICO_ERROR_TIMEOUT) {
-            printf("Read ready!");
-            readReady = true;
-        }
-
-        sleep_ms(100);
-    }
-
-    return 1;
-}
-
-int comm_send() {
-
-}
-
-int comm_receive() {
-
-}
-
 // UART defines
-// By default the stdout UART is `uart0`, so we will use the second one
 #define UART_ID uart1
-
-// Use pins 4 and 5 for UART1
-// Pins can be changed, see the GPIO function select table in the datasheet for information on GPIO assignments
 #define UART_TX_PIN 4
 #define UART_RX_PIN 5
+#define DEFAULT_BAUDRATE 115200
 
+// Mode: 0 = Send/Receive, 1 = Send only, 2 = Receive only
+#define MODE 0
 
+// Buffers for inter-core communication
+#define BUFFER_SIZE 256
+char tx_buffer[BUFFER_SIZE];
+char rx_buffer[BUFFER_SIZE];
+volatile int tx_ready = 0;
+volatile int rx_ready = 0;
+volatile uint32_t uart_baudrate = DEFAULT_BAUDRATE;
 
+// Function to get baudrate from user
+uint32_t get_baudrate_from_user() {
+    char input[16];
+    uint32_t baudrate = DEFAULT_BAUDRATE;
+
+    printf("Enter baudrate (or press Enter for %d): ", DEFAULT_BAUDRATE);
+    fflush(stdout);
+
+    int awaitEnter = getchar_timeout_us(0);
+        if (awaitEnter != PICO_ERROR_TIMEOUT) {
+            if (awaitEnter == 10 || awaitEnter == 13) {
+                printf("Using default: %d\n", DEFAULT_BAUDRATE);
+                return DEFAULT_BAUDRATE;
+            }
+        }
+
+    // if (fgets(input, sizeof(input), stdin) != NULL) {
+    //     // Check if user just pressed Enter (empty input)
+    //     if (input[0] == 10 || input[0] == 13) {
+    //         printf("Using default: %d\n", DEFAULT_BAUDRATE);
+    //         return DEFAULT_BAUDRATE;
+    //     }
+
+    //     int awaitEnter = getchar_timeout_us(0);
+    //     if (awaitEnter != PICO_ERROR_TIMEOUT) {
+    //         if (awaitEnter == 10 || awaitEnter == 13) {
+    //             printf("Using default: %d\n", DEFAULT_BAUDRATE);
+    //             return DEFAULT_BAUDRATE;
+    //         }
+    //     }
+
+    //     // Parse the input
+    //     char *endptr;
+    //     baudrate = strtoul(input, &endptr, 10);
+
+    //     // Validate the baudrate (common range)
+    //     if (baudrate < 300 || baudrate > 921600) {
+    //         printf("Invalid baudrate. Using default: %d\n", DEFAULT_BAUDRATE);
+    //         return DEFAULT_BAUDRATE;
+    //     }
+
+    //     printf("Baudrate set to: %d\n", baudrate);
+    // }
+
+    return baudrate;
+}
+
+// Core 1: Handles UART RX/TX to PICO2
+void core1_main() {
+    // Set up UART (GPIO FIRST, then uart_init)
+    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
+    gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+    uart_init(UART_ID, uart_baudrate);
+
+    printf("[Core 1] UART initialized at %d baud\n", uart_baudrate);
+
+    int rx_index = 0;
+
+    while (true) {
+        // Task 1: Send data from PC (via Core 0) to PICO2
+        if (tx_ready) {
+            uart_puts(UART_ID, tx_buffer);
+            printf("[Core 1] Sent to PICO2: %s", tx_buffer);
+            tx_ready = 0;
+        }
+
+        // Task 2: Receive data from PICO2 and buffer it
+        if (uart_is_readable(UART_ID)) {
+            char c = uart_getc(UART_ID);
+            
+            if (c == '\n' || c == '\r') {
+                if (rx_index > 0) {
+                    rx_buffer[rx_index] = '\0';
+                    rx_ready = 1;  // Signal Core 0 that data is ready
+                    printf("[Core 1] Received from PICO2: %s\n", rx_buffer);
+                    rx_index = 0;
+                }
+            } else if (rx_index < BUFFER_SIZE - 1) {
+                rx_buffer[rx_index++] = c;
+            }
+        }
+
+        sleep_ms(10);
+    }
+}
+
+// Core 0: Handles PC communication
 int main() {
     stdio_init_all();
 
-    // PIO Blinking example
-    // PIO pio = pio0;
-    // uint offset = pio_add_program(pio, &blink_program);
-    // printf("Loaded program at %d\n", offset);
-    
-    // #ifdef PICO_DEFAULT_LED_PIN
-    // blink_pin_forever(pio, 0, offset, PICO_DEFAULT_LED_PIN, 3);
-    // #else
-    // blink_pin_forever(pio, 0, offset, 6, 3);
-    // #endif
+    printf("[Core 0] Starting...\n");
 
+    // Wait for Enter to start
+    printf("Press Enter to begin...\n");
     while(true) {
         int awaitEnter = getchar_timeout_us(0);
         if (awaitEnter != PICO_ERROR_TIMEOUT) {
@@ -83,40 +126,38 @@ int main() {
         }
     }
 
-    // Set up our UART
-    int baudrate = 115200;
-    char buffer[128];
-    printf("Input new baudrate or keep old by pressing [Enter]: ");
-    while(true) {
-        int tempBaudRate = 0;
-        int readBaudRate = getchar_timeout_us(0);
-        if (readBaudRate != PICO_ERROR_TIMEOUT) {
-            if (scanf("%s", buffer) == 1) {
-                printf("You sent: %s\n", buffer);
-                tempBaudRate = atoi(buffer);
-            }
+    // Get baudrate from user
+    uart_baudrate = get_baudrate_from_user();
 
-            if (readBaudRate == 10 || readBaudRate == 13) {
-                baudrate = tempBaudRate;
-                break;
+    // Launch Core 1 (after baudrate is set)
+    multicore_launch_core1(core1_main);
+    printf("[Core 0] Core 1 launched\n");
+
+    printf("Mode: %d (0=Send+Receive, 1=Send Only, 2=Receive Only)\n", MODE);
+    printf("Enter messages to send to PICO2:\n");
+
+    while (true) {
+        // Task 1: Read from PC (stdin)
+        if ((MODE == 0 || MODE == 1) && getchar_timeout_us(0) != PICO_ERROR_TIMEOUT) {
+            // User started typing, read the full line
+            if (fgets(tx_buffer, BUFFER_SIZE, stdin) != NULL) {
+                tx_ready = 1;  // Signal Core 1 to send
+                
+                // Wait for Core 1 to process
+                while (tx_ready) {
+                    sleep_ms(1);
+                }
             }
         }
+
+        // Task 2: Display received data from PICO2
+        if ((MODE == 0 || MODE == 2) && rx_ready) {
+            printf("[Core 0] Data from PICO2: %s\n", rx_buffer);
+            rx_ready = 0;
+        }
+
+        sleep_ms(10);
     }
 
-    printf("New baudrate: %d\n", baudrate);
-
-    // uart_init(UART_ID, baudrate);
-    
-    // gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
-    // gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
-    
-    // uart_puts(UART_ID, " Hello, UART!\n");
-
-    int commReady = 0;
-    commReady = comm_check();
-
-    while (commReady == 1) {
-        printf("Hello, Skylink!\n");
-        sleep_ms(100);
-    }
+    return 0;
 }
